@@ -102,7 +102,7 @@ def test_simple_schedule(clockmock):
 
 @mark.parametrize("scheduled", [True, False])
 @mark.parametrize(
-    "passed_time, now, unit, count, added_time",
+    "passed_time, now, unit, count, expect_added_time",
     [
         # simple
         (td(), td(hours=4, minutes=30), 'hours', 3, td(hours=3)),
@@ -116,7 +116,7 @@ def test_simple_schedule(clockmock):
         (td(hours=7), td(hours=4, minutes=30), 'hours', 3, td(hours=2)),
     ],
 )
-def test_interval(clockmock, passed_time, scheduled, now, unit, count, added_time):
+def test_interval(clockmock, passed_time, scheduled, now, unit, count, expect_added_time):
     """Test scheduling in interval mode."""
     # setup
     scheduler = VortaScheduler()
@@ -143,21 +143,22 @@ def test_interval(clockmock, passed_time, scheduled, now, unit, count, added_tim
 
     # run test
     scheduler.set_timer_for_profile(profile.id)
-    assert scheduler.timers[profile.id]['dt'] == time + added_time
+    expected_time = time + expect_added_time
+    assert scheduler.timers[profile.id]['dt'] == expected_time
 
 
 @mark.parametrize("scheduled", [True, False])
 @mark.parametrize("passed_time", [td(hours=0), td(hours=5), td(hours=14), td(hours=27)])
 @mark.parametrize(
-    "now, hour, minute",
+    "now, hour, minute, expect_added_time",
     [
         # same day
-        (td(hours=4, minutes=30), 15, 00),
+        (td(hours=4, minutes=30), 15, 00, td(hours=10, minutes=30)),
         # next day
-        (td(hours=4, minutes=30), 3, 30),
+        (td(hours=4, minutes=30), 3, 30, td(hours=23)),
     ],
 )
-def test_fixed(clockmock, passed_time, scheduled, now, hour, minute):
+def test_fixed(clockmock, passed_time, scheduled, now, hour, minute, expect_added_time):
     """Test scheduling in fixed mode."""
     # setup
     scheduler = VortaScheduler()
@@ -184,10 +185,6 @@ def test_fixed(clockmock, passed_time, scheduled, now, hour, minute):
     event.save()
 
     # run test
-    expected = time.replace(hour=hour, minute=minute)
-
-    if time >= expected or last_time.date() == expected.date():
-        expected += td(days=1)
-
     scheduler.set_timer_for_profile(profile.id)
-    assert scheduler.timers[profile.id]['dt'] == expected
+    expected_time = time + expect_added_time
+    assert scheduler.timers[profile.id]['dt'] == expected_time
