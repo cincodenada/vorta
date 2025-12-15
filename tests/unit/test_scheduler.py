@@ -1,7 +1,7 @@
 from datetime import datetime as dt
 from datetime import timedelta as td
 from functools import wraps
-from unittest.mock import MagicMock
+from unittest.mock import Mock, MagicMock
 
 import pytest
 from pytest import mark
@@ -23,6 +23,14 @@ def clockmock(monkeypatch):
     monkeypatch.setattr(vorta.scheduler, "dt", datetime_mock)
 
     return datetime_mock
+
+
+@pytest.fixture
+def add_job_mock(qapp, monkeypatch):
+    add_job_mock = Mock()
+    monkeypatch.setattr(qapp.jobs_manager, "add_job", add_job_mock)
+
+    return add_job_mock
 
 
 def prepare(func):
@@ -102,7 +110,7 @@ def test_simple_schedule(clockmock):
 
 @mark.parametrize("scheduled", [True, False])
 @mark.parametrize(
-    "passed_time, now, unit, count, expect_added_time",
+    "time_since_last_run, now, unit, count, expect_added_time",
     [
         # simple
         (td(), td(hours=4, minutes=30), 'hours', 3, td(hours=3)),
@@ -116,7 +124,7 @@ def test_simple_schedule(clockmock):
         (td(hours=7), td(hours=4, minutes=30), 'hours', 3, td(hours=2)),
     ],
 )
-def test_interval(clockmock, passed_time, scheduled, now, unit, count, expect_added_time):
+def test_interval(clockmock, time_since_last_run, scheduled, now, unit, count, expect_added_time):
     """Test scheduling in interval mode."""
     # setup
     scheduler = VortaScheduler()
@@ -136,8 +144,8 @@ def test_interval(clockmock, passed_time, scheduled, now, unit, count, expect_ad
         profile=profile.id,
         returncode=0,
         category='scheduled' if scheduled else '',
-        start_time=time - passed_time,
-        end_time=time - passed_time,
+        start_time=time - time_since_last_run,
+        end_time=time - time_since_last_run,
     )
     event.save()
 
@@ -148,7 +156,7 @@ def test_interval(clockmock, passed_time, scheduled, now, unit, count, expect_ad
 
 
 @mark.parametrize("scheduled", [True, False])
-@mark.parametrize("passed_time", [td(hours=0), td(hours=5), td(hours=14), td(hours=27)])
+@mark.parametrize("time_since_last_run", [td(hours=0), td(hours=5), td(hours=14), td(hours=27)])
 @mark.parametrize(
     "now, hour, minute, expect_added_time",
     [
@@ -158,7 +166,7 @@ def test_interval(clockmock, passed_time, scheduled, now, unit, count, expect_ad
         (td(hours=4, minutes=30), 3, 30, td(hours=23)),
     ],
 )
-def test_fixed(clockmock, passed_time, scheduled, now, hour, minute, expect_added_time):
+def test_fixed(clockmock, time_since_last_run, scheduled, now, hour, minute, expect_added_time):
     """Test scheduling in fixed mode."""
     # setup
     scheduler = VortaScheduler()
@@ -173,7 +181,7 @@ def test_fixed(clockmock, passed_time, scheduled, now, hour, minute, expect_adde
     profile.schedule_fixed_minute = minute
     profile.save()
 
-    last_time = time - passed_time
+    last_time = time - time_since_last_run
     event = EventLogModel(
         subcommand='create',
         profile=profile.id,
@@ -186,5 +194,61 @@ def test_fixed(clockmock, passed_time, scheduled, now, hour, minute, expect_adde
 
     # run test
     scheduler.set_timer_for_profile(profile.id)
+
     expected_time = time + expect_added_time
     assert scheduler.timers[profile.id]['dt'] == expected_time
+
+
+@mark.parametrize("scheduled", [True, False])
+@mark.parametrize(
+    "time_since_last_run, now, hour, minute, expect_missed, expect_added_time",
+    [
+        # same day
+        (td(hours=0), td(hours=4, minutes=30), 15, 00, False, td(days=1, hours=10, minutes=30)),
+        (td(hours=5), td(hours=4, minutes=30), 15, 00, False, td(hours=10, minutes=30)),
+        (td(hours=20), td(hours=4, minutes=30), 15, 00, False, td(hours=10, minutes=30)),
+        (td(hours=30), td(hours=4, minutes=30), 15, 00, True, td(hours=10, minutes=30)),
+        # next day
+        (td(hours=0), td(hours=4, minutes=30), 3, 30, False, td(hours=23)),
+        (td(hours=5), td(hours=4, minutes=30), 3, 30, True, td(hours=23)),
+        (td(hours=20), td(hours=4, minutes=30), 3, 30, True, td(hours=23)),
+        (td(hours=30), td(hours=4, minutes=30), 3, 30, True, td(hours=23)),
+    ],
+)
+def test_missed_fixed(
+    add_job_mock, clockmock, time_since_last_run, scheduled, now, hour, minute, expect_missed, expect_added_time
+):
+    """Test scheduling in fixed mode."""
+    # setup
+    scheduler = VortaScheduler()
+
+    time = dt(2020, 5, 4, 0, 0) + now
+    clockmock.now.return_value = time
+
+    profile = BackupProfileModel.get(name=PROFILE_NAME)
+    profile.schedule_make_up_missed = True
+    profile.schedule_mode = FIXED_SCHEDULE
+    profile.schedule_fixed_hour = hour
+    profile.schedule_fixed_minute = minute
+    profile.save()
+
+    last_time = time - time_since_last_run
+    event = EventLogModel(
+        subcommand='create',
+        profile=profile.id,
+        returncode=0,
+        category='scheduled' if scheduled else '',
+        start_time=last_time,
+        end_time=last_time,
+    )
+    event.save()
+
+    # run test
+    scheduler.set_timer_for_profile(profile.id)
+
+    if expect_missed:
+        add_job_mock.assert_called_once()
+    else:
+        add_job_mock.assert_not_called()
+        expected_time = time + expect_added_time
+        assert scheduler.timers[profile.id]['dt'] == expected_time
