@@ -24,6 +24,36 @@ from vorta.utils import borg_compat
 logger = logging.getLogger(__name__)
 
 
+# Helper methods
+def calculate_next_time(profile, last_run_time: dt):
+    # calculate next time from now
+    if profile.schedule_mode == 'interval':
+        # next_time % interval should be 0
+        # while next_time > now
+        interval = {profile.schedule_interval_unit: profile.schedule_interval_count}
+        delta_from_last_run = dt.now() - last_run_time
+        next_time = dt.now() - delta_from_last_run % timedelta(**interval)
+        next_time += timedelta(**interval)
+
+    elif profile.schedule_mode == 'fixed':
+        # schedule for today
+        next_time = dt.now().replace(
+            hour=profile.schedule_fixed_hour,
+            minute=profile.schedule_fixed_minute,
+            second=0,
+            microsecond=0,
+        )
+
+        if next_time <= dt.now():
+            # time for today has passed, schedule for tomorrow
+            next_time += timedelta(days=1)
+
+    else:
+        # unknown schedule mode
+        raise ValueError("Unknown schedule mode '{}'".format(profile.schedule_mode))
+    return next_time
+
+
 class ScheduleStatusType(enum.Enum):
     SCHEDULED = enum.auto()  # date provided
     UNSCHEDULED = enum.auto()  # Unknown
@@ -270,26 +300,7 @@ class VortaScheduler(QtCore.QObject):
                 self.schedule_changed.emit(profile_id)
                 return
 
-            # calculate next scheduled time
-            if profile.schedule_mode == 'interval':
-                last_time: dt = last_run_log.end_time
-
-                interval = {profile.schedule_interval_unit: profile.schedule_interval_count}
-                next_time = last_time + timedelta(**interval)
-
-            elif profile.schedule_mode == 'fixed':
-                last_time = last_run_log.end_time
-
-                next_time = last_time.replace(
-                    hour=profile.schedule_fixed_hour,
-                    minute=profile.schedule_fixed_minute,
-                    second=0,
-                    microsecond=0,
-                ) + timedelta(days=1)
-
-            else:
-                # unknown schedule mode
-                raise ValueError("Unknown schedule mode '{}'".format(profile.schedule_mode))
+            next_time = calculate_next_time(profile, last_run_log.end_time)
 
             # handle missing of a scheduled time
             if next_time <= dt.now():
@@ -307,26 +318,7 @@ class VortaScheduler(QtCore.QObject):
 
                     return  # create_backup will lead to a call to this method
 
-                # calculate next time from now
-                if profile.schedule_mode == 'interval':
-                    # next_time % interval should be 0
-                    # while next_time > now
-                    delta = dt.now() - last_time
-                    next_time = dt.now() - delta % timedelta(**interval)
-                    next_time += timedelta(**interval)
-
-                elif profile.schedule_mode == 'fixed':
-                    # schedule for today
-                    next_time = dt.now().replace(
-                        hour=profile.schedule_fixed_hour,
-                        minute=profile.schedule_fixed_minute,
-                        second=0,
-                        microsecond=0,
-                    )
-
-                    if next_time <= dt.now():
-                        # time for today has passed, schedule for tomorrow
-                        next_time += timedelta(days=1)
+                next_time = calculate_next_time(profile, last_time)
 
             # start QTimer
             timer_ms = (next_time - dt.now()).total_seconds() * 1000
