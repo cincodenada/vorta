@@ -2,7 +2,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from vorta.network_status import darwin
+try:
+    from vorta.network_status import darwin
+except ImportError:
+    pytest.skip("Skipping darwin-only network tests", allow_module_level=True)
 
 
 def test_get_current_wifi_when_wifi_is_on(mocker):
